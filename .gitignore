@@ -1,0 +1,5 @@
+# 内网/本地专属，禁止提交
+LOCAL-*
+*.local
+.grafana-runtime/
+always-sql/

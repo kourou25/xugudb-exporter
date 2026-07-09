@@ -50,3 +50,9 @@ set_slow_sql_time: 0
 # 默认自动发现本机虚谷进程的可执行/工作目录；自动发现失败时在此指定，如：
 # trc_dirs: ["/opt/xugu/bin"]
 trc_dirs: []
+
+# 备份检测附加目录（备份/归档文件落地实况）。
+# 默认自动发现本机虚谷进程安装目录，读 SETUP/mount.ini 解析 /BACKUP、/ARCH 物理路径；
+# 自动发现失败或备份目录在别处时显式指定（安装根目录 或 直接给备份目录），如：
+# backup_dirs: ["/opt/xugu/Server"]
+backup_dirs: []

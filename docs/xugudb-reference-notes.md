@@ -61,6 +61,11 @@ MIGRATE（存储均衡）、MOUNT_ERR*、REPAIR*（REDO 恢复）、RESTORE*、S
   （实测互等 20 分钟无报错、DEAD_LOCK_N 恒 0），监控上表现为长事务，靠长事务/事务号差告警兜底。
 - **处理手段**：`EXEC DBMS_DBA.KILL_TRANS(节点ID, 事务ID);`（官方运维脚本口径）。
 - LOCK_LEVEL：S/X/IS/IX/SIX（SIX 文档注明"暂未使用"）。
+- **⚠️ RUN_INFO 锁计数列不可信（重要）**：`SYS_ALL_RUN_INFO` 的 `S/X/IS/IX/SIX_LOCK_N` 五列
+  在 12.0.0 存在计数漂移，实测出现负值（如 `IS_LOCK_N=-310`、`IX_LOCK_N=-11`）且与
+  `SYS_ALL_LOWNERS` 实际持有记录（IS=2）严重不符，三次采样稳定复现。**锁数量必须以
+  `SYS_ALL_LOWNERS` 按 `LOCK_LEVEL` 聚合为准**；exporter 的 `xugu_locks{mode}` 已据此改造，
+  RUN_INFO 仅用于枚举节点。回归用例 MS-8/MS-8b 固化该校验。
 
 ## 5. 会话与线程
 

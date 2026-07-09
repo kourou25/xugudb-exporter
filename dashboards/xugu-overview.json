@@ -1785,6 +1785,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "description": "物理读写字节速率（与 IOPS 面板同源不同单位）：读吞吐高说明缓冲池未覆盖热数据，写吞吐对应脏页刷盘与 WAL 落盘的合计磁盘压力",
       "targets": [
         {
           "datasource": {
@@ -2209,6 +2210,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "description": "各 DATA 数据文件组内已被存储段实际占用的逻辑空间；持续上升代表真实数据增长，回落代表删除/整理后空间转入可复用池（物理文件不缩小）",
       "targets": [
         {
           "datasource": {
@@ -5199,6 +5201,618 @@
         "justifyMode": "auto",
         "orientation": "auto"
       }
+    },
+    {
+      "id": 76,
+      "type": "table",
+      "title": "备份 / 归档文件落地实况",
+      "gridPos": {
+        "x": 0,
+        "y": 153,
+        "w": 16,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "扫描 mount.ini 的 /BACKUP、/ARCH 物理目录得到的备份落地实况，与 SYS_BACKUP_PLANS(备份计划)互补：计划启用但文件数长期为 0 或最新文件距今过久，即备份未真正产生/已陈旧。异机部署时用 backup_dirs 指定目录",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "xugu_backup_files{instance=\"$instance\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "xugu_backup_files_size_bytes{instance=\"$instance\"}",
+          "refId": "B",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "time() - xugu_backup_newest_file_timestamp_seconds{instance=\"$instance\"}",
+          "refId": "C",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true
+            }
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "instance": true,
+              "job": true,
+              "env": true
+            },
+            "renameByName": {
+              "kind": "类型",
+              "dir": "目录",
+              "Value #A": "文件数",
+              "Value #B": "总大小",
+              "Value #C": "最新文件距今"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "总大小"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "最新文件距今"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "文件数"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "类型"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "id": 77,
+      "type": "stat",
+      "title": "备份新鲜度",
+      "gridPos": {
+        "x": 16,
+        "y": 153,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "最新备份文件距今时长。超过 24 小时告警(XuguBackupStale)；显示'无备份'且备份计划已启用会触发 XuguBackupMissing。备份文件落地口径，非备份计划配置",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "time() - max(xugu_backup_newest_file_timestamp_seconds{instance=\"$instance\",kind=\"BACKUP\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 86400
+              },
+              {
+                "color": "red",
+                "value": 259200
+              }
+            ]
+          },
+          "noValue": "无备份"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 82,
+      "type": "row",
+      "title": "会话属性（默认折叠）",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 161,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "id": 78,
+          "type": "table",
+          "title": "会话属性分布",
+          "gridPos": {
+            "x": 0,
+            "y": 162,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "全部连接按 10 类属性的取值分布：字符集/时区/自动提交/隔离级别/兼容模式/空串转NULL/严格提交/锁超时/关键字过滤/应用名。同一属性出现多个取值即存在配置漂移，可据此发现字符集不一致、意外兼容模式等问题。SSL 为连接串侧属性，服务端无会话级视图",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "expr": "xugu_sessions_by_attribute{instance=\"$instance\",node=~\"$node\"}",
+              "refId": "A",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "instance": true,
+                  "job": true,
+                  "env": true
+                },
+                "renameByName": {
+                  "node": "节点",
+                  "attr": "属性",
+                  "val": "取值",
+                  "Value": "会话数"
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {
+                "sort": [
+                  {
+                    "field": "属性",
+                    "desc": false
+                  }
+                ]
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "filterable": false
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "属性"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "会话数"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "节点"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 60
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "id": 79,
+          "type": "table",
+          "title": "保持最久的连接明细",
+          "gridPos": {
+            "x": 8,
+            "y": 162,
+            "w": 16,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "保持时间最久的 10 个连接及其属性（用户/库/IP/字符集/时区/自动提交/兼容模式）。长期不释放的连接可据此定位应用连接池配置；配合 max_idle_time 参数管理空闲连接",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "expr": "topk(10, xugu_session_detail_age_seconds{instance=\"$instance\",node=~\"$node\"})",
+              "refId": "A",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "instance": true,
+                  "job": true,
+                  "env": true
+                },
+                "renameByName": {
+                  "node": "节点",
+                  "session_id": "会话SID",
+                  "username": "用户",
+                  "db": "数据库",
+                  "client_ip": "客户端IP",
+                  "char_set": "字符集",
+                  "time_zone": "时区",
+                  "autocommit": "自动提交",
+                  "compatible_mode": "兼容模式",
+                  "Value": "保持时长"
+                }
+              }
+            },
+            {
+              "id": "sortBy",
+              "options": {
+                "sort": [
+                  {
+                    "field": "保持时长",
+                    "desc": true
+                  }
+                ]
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "filterable": false
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "保持时长"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "s"
+                  },
+                  {
+                    "id": "decimals",
+                    "value": 0
+                  },
+                  {
+                    "id": "custom.width",
+                    "value": 110
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false,
+              "reducer": [
+                "sum"
+              ],
+              "countRows": false,
+              "fields": ""
+            }
+          }
+        },
+        {
+          "id": 80,
+          "type": "timeseries",
+          "title": "最长连接保持时长",
+          "gridPos": {
+            "x": 0,
+            "y": 170,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "最早建立连接至今的时长；持续增长属正常（常驻连接池），关注点是其与 max_idle_time 的关系以及是否存在预期外的常驻连接",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "expr": "clamp_min(time() - min(xugu_session_oldest_connect_timestamp_seconds{instance=\"$instance\",node=~\"$node\"}), 0)",
+              "refId": "A",
+              "legendFormat": "最长连接保持"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "id": 81,
+          "type": "timeseries",
+          "title": "会话内存（合计 / 单会话峰值）",
+          "gridPos": {
+            "x": 12,
+            "y": 170,
+            "w": 12,
+            "h": 7
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "连接内存消耗：合计反映连接规模成本，单会话峰值异常偏大提示大结果集/大排序",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "expr": "sum(xugu_sessions_memory_bytes{instance=\"$instance\",node=~\"$node\"})",
+              "refId": "A",
+              "legendFormat": "全部会话合计"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "expr": "max(xugu_session_memory_max_bytes{instance=\"$instance\",node=~\"$node\"})",
+              "refId": "B",
+              "legendFormat": "单会话峰值"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "pointSize": 5,
+                "spanNulls": true,
+                "axisPlacement": "auto"
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
     }
   ]
 }

@@ -13,48 +13,51 @@
 | 3 | sessions | 2 | - |  | rows |
 | 4 | sessions_active | 2 | - |  | rows |
 | 5 | sessions_by_status | 1 | - |  | rows |
-| 6 | sessions_by_source | 1 | - |  | rows |
-| 7 | max_connections | 1 | 300s |  | rows |
-| 8 | transactions | 2 | - |  | rows |
-| 9 | run_info | 10 | - |  | rows |
-| 10 | locks_by_mode | 1 | - |  | rows |
-| 11 | lock_waiters | 2 | - |  | rows |
-| 12 | lock_wait_detail | 1 | - |  | rows |
-| 13 | lock_owner_detail | 1 | - |  | rows |
-| 14 | glock_waiters | 2 | - | 是 | rows |
-| 15 | cluster_msgs | 2 | - | 是 | rows |
-| 16 | worker_threads | 1 | - |  | rows |
-| 17 | worker_threads_waiting | 1 | - |  | rows |
-| 18 | threads_memory | 2 | - |  | rows |
-| 19 | active_statements | 1 | - |  | rows |
-| 20 | cluster_msg_quality | 1 | - | 是 | keyvalue |
-| 21 | memory | 9 | - |  | rows |
-| 22 | memory_pools | 1 | - |  | keyvalue |
-| 23 | tablespaces | 4 | 60s |  | rows |
-| 24 | datafiles | 1 | 60s |  | rows |
-| 25 | slowsql | 1 | 60s |  | rows |
-| 26 | slowsql_recent | 2 | 60s |  | rows |
-| 27 | slowsql_top | 1 | 60s |  | rows |
-| 28 | errorlog | 1 | 60s |  | rows |
-| 29 | errorlog_top | 1 | 60s |  | rows |
-| 30 | errorlog_fatal | 1 | 60s |  | rows |
-| 31 | eventlog | 1 | 120s |  | rows |
-| 32 | cluster_nodes | 1 | - |  | rows |
-| 33 | gstores | 1 | 60s |  | rows |
-| 34 | databases | 1 | 120s |  | rows |
-| 35 | invalid_objects | 1 | 300s |  | rows |
-| 36 | database_storage | 1 | 300s |  | rows |
-| 37 | object_storage_top | 1 | 300s |  | rows |
-| 38 | schema_storage_top | 1 | 300s |  | rows |
-| 39 | storage_fragment | 2 | 300s |  | rows |
-| 40 | users | 3 | 120s |  | rows |
-| 41 | forbidden_ips | 1 | 120s |  | rows |
-| 42 | recyclebin | 1 | 120s |  | rows |
-| 43 | settings | 1 | 300s |  | keyvalue |
-| 44 | jobs | 2 | 120s |  | rows |
-| 45 | backup | 3 | 300s |  | rows |
+| 6 | session_attributes | 1 | 60s |  | rows |
+| 7 | session_detail | 2 | 60s |  | rows |
+| 8 | session_age | 2 | - |  | rows |
+| 9 | sessions_by_source | 1 | - |  | rows |
+| 10 | max_connections | 1 | 300s |  | rows |
+| 11 | transactions | 2 | - |  | rows |
+| 12 | run_info | 10 | - |  | rows |
+| 13 | locks_by_mode | 1 | - |  | rows |
+| 14 | lock_waiters | 2 | - |  | rows |
+| 15 | lock_wait_detail | 1 | - |  | rows |
+| 16 | lock_owner_detail | 1 | - |  | rows |
+| 17 | glock_waiters | 2 | - | 是 | rows |
+| 18 | cluster_msgs | 2 | - | 是 | rows |
+| 19 | worker_threads | 1 | - |  | rows |
+| 20 | worker_threads_waiting | 1 | - |  | rows |
+| 21 | threads_memory | 2 | - |  | rows |
+| 22 | active_statements | 1 | - |  | rows |
+| 23 | cluster_msg_quality | 1 | - | 是 | keyvalue |
+| 24 | memory | 9 | - |  | rows |
+| 25 | memory_pools | 1 | - |  | keyvalue |
+| 26 | tablespaces | 4 | 60s |  | rows |
+| 27 | datafiles | 1 | 60s |  | rows |
+| 28 | slowsql | 1 | 60s |  | rows |
+| 29 | slowsql_recent | 2 | 60s |  | rows |
+| 30 | slowsql_top | 1 | 60s |  | rows |
+| 31 | errorlog | 1 | 60s |  | rows |
+| 32 | errorlog_top | 1 | 60s |  | rows |
+| 33 | errorlog_fatal | 1 | 60s |  | rows |
+| 34 | eventlog | 1 | 120s |  | rows |
+| 35 | cluster_nodes | 1 | - |  | rows |
+| 36 | gstores | 1 | 60s |  | rows |
+| 37 | databases | 1 | 120s |  | rows |
+| 38 | invalid_objects | 1 | 300s |  | rows |
+| 39 | database_storage | 1 | 300s |  | rows |
+| 40 | object_storage_top | 1 | 300s |  | rows |
+| 41 | schema_storage_top | 1 | 300s |  | rows |
+| 42 | storage_fragment | 2 | 300s |  | rows |
+| 43 | users | 3 | 120s |  | rows |
+| 44 | forbidden_ips | 1 | 120s |  | rows |
+| 45 | recyclebin | 1 | 120s |  | rows |
+| 46 | settings | 1 | 300s |  | keyvalue |
+| 47 | jobs | 2 | 120s |  | rows |
+| 48 | backup | 3 | 300s |  | rows |
 
-共 45 个采集域、83 个 SQL 来源指标。
+共 48 个采集域、88 个 SQL 来源指标。
 
 ## 指标 ↔ SQL 对照明细
 
@@ -131,6 +134,72 @@ FROM SYS_ALL_SESSIONS GROUP BY NODEID, STATUS
 |--|--|--|--|
 | `xugu_sessions_by_status` | gauge | node, status | 按状态码分组的会话数(实测 112=空闲 114=执行中) |
 
+### 采集域 `session_attributes`（TTL 60s）
+
+```sql
+SELECT NODEID AS NODE, '字符集' AS ATTR, CHAR_SET AS VAL, COUNT(*) AS CNT
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, CHAR_SET
+UNION ALL SELECT NODEID, '时区', TIME_ZONE, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, TIME_ZONE
+UNION ALL SELECT NODEID, '自动提交', CASE WHEN AUTO_COMMIT THEN '开' ELSE '关' END, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, AUTO_COMMIT
+UNION ALL SELECT NODEID, '隔离级别', TO_CHAR(ISO_LEVEL), COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, ISO_LEVEL
+UNION ALL SELECT NODEID, '兼容模式', COMPATIBLE_MODE, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, COMPATIBLE_MODE
+UNION ALL SELECT NODEID, '空串转NULL', CASE WHEN EMPTY_STR_AS_NULL THEN '是' ELSE '否' END, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, EMPTY_STR_AS_NULL
+UNION ALL SELECT NODEID, '严格提交', CASE WHEN STRICT_COMMIT THEN '开' ELSE '关' END, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, STRICT_COMMIT
+UNION ALL SELECT NODEID, '锁超时秒', TO_CHAR(LOCK_TIMEOUT), COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, LOCK_TIMEOUT
+UNION ALL SELECT NODEID, '关键字过滤', COALESCE(KEYWORD_FILTER,'无'), COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, KEYWORD_FILTER
+UNION ALL SELECT NODEID, '应用名', CASE WHEN APP_NAME='' OR APP_NAME IS NULL THEN '未设置' ELSE APP_NAME END, COUNT(*)
+  FROM SYS_ALL_SESSIONS GROUP BY NODEID, APP_NAME
+```
+
+**SQL 说明**：单条 SQL 用 10 段 UNION ALL 把字符集/时区/自动提交/隔离级别/兼容模式/空串转NULL/严格提交/锁超时/关键字过滤/应用名十类会话属性透视为 attr/val/计数 行式输出；布尔列 CASE 译为 开/关，NULL 关键字过滤显示为'无'。SSL 为连接串侧属性，服务端无会话级字段。
+
+| 指标 | 类型 | Labels | 说明 |
+|--|--|--|--|
+| `xugu_sessions_by_attribute` | gauge | node, attr, val | 会话数按连接属性取值分布(字符集/时区/自动提交/隔离级别/兼容模式/空串转NULL/严格提交/锁超时/关键字过滤/应用名)。字符集或时区不一致、意外的兼容模式等配置漂移可在此发现 |
+
+### 采集域 `session_detail`（TTL 60s）
+
+```sql
+SELECT NODEID AS NODE, SESSION_ID, USER_NAME AS USERNAME, DB_NAME AS DB,
+       IP AS CLIENT_IP, CHAR_SET, TIME_ZONE,
+       CASE WHEN AUTO_COMMIT THEN '开' ELSE '关' END AS AUTOCOMMIT,
+       COMPATIBLE_MODE, MEM_SIZE,
+       MAX((SYSDATE - START_T)*86400) AS SECS
+FROM SYS_ALL_SESSIONS
+GROUP BY NODEID, SESSION_ID, USER_NAME, DB_NAME, IP, CHAR_SET, TIME_ZONE,
+         AUTO_COMMIT, COMPATIBLE_MODE, MEM_SIZE
+ORDER BY SECS DESC LIMIT 10
+```
+
+**SQL 说明**：按连接建立时间取保持最久的 10 个连接，(SYSDATE-START_T)*86400 计算保持秒数；用户/库/IP/字符集/时区/自动提交/兼容模式随行输出，另附各连接的 MEM_SIZE 会话内存。GROUP BY 全标签列防重复序列。
+
+| 指标 | 类型 | Labels | 说明 |
+|--|--|--|--|
+| `xugu_session_detail_age_seconds` | gauge | node, session_id, username, db, client_ip, char_set, time_zone, autocommit, compatible_mode | 保持时间最久的 10 个连接：用户/库/IP/字符集/时区/自动提交/兼容模式在 label，值为连接保持秒数。长期不释放的连接可据此定位应用侧连接池配置 |
+| `xugu_session_detail_memory_bytes` | gauge | node, session_id, username, db, client_ip, char_set, time_zone, autocommit, compatible_mode | 上述最久连接各自的会话内存占用(字节) |
+
+### 采集域 `session_age`
+
+```sql
+SELECT NODEID AS NODE, MIN(START_T) AS OLDEST_CONN, MAX(MEM_SIZE) AS MAX_MEM
+FROM SYS_ALL_SESSIONS GROUP BY NODEID
+```
+
+**SQL 说明**：按节点聚合最早连接时间(MIN START_T→Unix秒，面板 time()-x 得最长保持时长)与单会话最大内存(MAX MEM_SIZE)。
+
+| 指标 | 类型 | Labels | 说明 |
+|--|--|--|--|
+| `xugu_session_oldest_connect_timestamp_seconds` | gauge | node | 最早建立的连接时间(Unix秒)，最长连接保持时长 = time() - 本值 |
+| `xugu_session_memory_max_bytes` | gauge | node | 单个会话的最大内存占用(字节) |
+
 ### 采集域 `sessions_by_source`
 
 ```sql
@@ -198,18 +267,20 @@ FROM SYS_ALL_RUN_INFO
 ### 采集域 `locks_by_mode`
 
 ```sql
-SELECT NODEID AS NODE, 'S'   AS MODE, S_LOCK_N   AS CNT FROM SYS_ALL_RUN_INFO UNION ALL
-SELECT NODEID, 'X',   X_LOCK_N   FROM SYS_ALL_RUN_INFO UNION ALL
-SELECT NODEID, 'IS',  IS_LOCK_N  FROM SYS_ALL_RUN_INFO UNION ALL
-SELECT NODEID, 'IX',  IX_LOCK_N  FROM SYS_ALL_RUN_INFO UNION ALL
-SELECT NODEID, 'SIX', SIX_LOCK_N FROM SYS_ALL_RUN_INFO
+SELECT R.NODEID AS NODE, M.MODE, COALESCE(L.CNT,0) AS CNT
+FROM SYS_ALL_RUN_INFO R
+CROSS JOIN (SELECT 'S' AS MODE FROM DUAL UNION ALL SELECT 'X'
+            UNION ALL SELECT 'IS' UNION ALL SELECT 'IX' UNION ALL SELECT 'SIX') M
+LEFT JOIN (SELECT NODEID, LOCK_LEVEL, COUNT(*) AS CNT
+           FROM SYS_ALL_LOWNERS GROUP BY NODEID, LOCK_LEVEL) L
+  ON L.NODEID=R.NODEID AND L.LOCK_LEVEL=M.MODE
 ```
 
 **SQL 说明**：用 5 段 UNION ALL 把 RUN_INFO 的 S/X/IS/IX/SIX 五个锁计数列转成带 mode 标签的行式指标。
 
 | 指标 | 类型 | Labels | 说明 |
 |--|--|--|--|
-| `xugu_locks` | gauge | node, mode | 当前持有锁数量(按锁模式 S/X/IS/IX/SIX) |
+| `xugu_locks` | gauge | node, mode | 当前持有锁数量(按锁模式 S/X/IS/IX/SIX，来源 SYS_ALL_LOWNERS 实际持有记录) |
 
 ### 采集域 `lock_waiters`
 
@@ -814,5 +885,19 @@ FROM DUAL
 | `xugu_host_memory_total_bytes` / `_available_bytes` | 物理内存总量/可用（可用率<10% 有 OOM 风险） |
 | `xugu_host_swap_total_bytes` / `_free_bytes` | 交换区 |
 | `xugu_host_disk_total_bytes` / `_free_bytes` `{mountpoint,fstype}` | 磁盘分区容量/剩余 |
+| `xugu_host_db_processes` | 数据库进程存活(1=运行中 0=未检测到，单进程架构) |
+| `xugu_trc_files` `{dir}` | 异常堆栈文件(exception_stack.trc)数量，>0 表示 E19002 级崩溃 |
+| `xugu_trc_file_size_bytes` / `_mtime_seconds` `{dir,file}` | 异常堆栈文件大小/修改时间(追加写，增长=新崩溃) |
 
 > 注意：主机指标反映 exporter 所在机器；与数据库异机部署时请设 `host_metrics: false` 并改用 node_exporter/windows_exporter。
+
+## 备份检测指标（host_metrics: true 时启用，扫描 mount.ini 的 /BACKUP、/ARCH 目录）
+
+| 指标 | 说明 |
+|--|--|
+| `xugu_backup_files` `{kind,dir}` | 备份/归档目录文件数(kind=BACKUP/ARCH)，计划启用但为 0 说明备份未产生 |
+| `xugu_backup_files_size_bytes` `{kind,dir}` | 备份/归档目录文件总大小 |
+| `xugu_backup_newest_file_timestamp_seconds` `{kind,dir}` | 最新备份文件修改时间(Unix秒)，距今过久=备份陈旧 |
+| `xugu_backup_newest_file_size_bytes` `{kind,dir}` | 最新备份文件大小 |
+
+> 备份检测反映备份文件"落地实况"，与 SYS_BACKUP_PLANS(备份"计划")互补；异机部署用 `backup_dirs` 指定安装根目录或备份目录。

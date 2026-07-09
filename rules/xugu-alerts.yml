@@ -139,6 +139,28 @@ groups:
           summary: "磁盘预计 7 天内写满 ({{ $labels.instance }} {{ $labels.mountpoint }})"
           description: "按最近 1 天趋势外推，分区 {{ $labels.mountpoint }} 将在 7 天内耗尽。数据文件自动扩展依赖该分区剩余空间，请提前扩容或清理。"
 
+  - name: xugudb.backup
+    rules:
+      # xugu_backup_* 为 exporter 扫描 mount.ini 的 /BACKUP、/ARCH 目录得到的备份落地实况。
+      # 与 SYS_BACKUP_PLANS（备份"计划"）互补：计划启用但文件不产生/陈旧靠这里发现。
+      - alert: XuguBackupStale
+        expr: (time() - xugu_backup_newest_file_timestamp_seconds{kind="BACKUP"}) > 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "备份文件陈旧超过 24 小时 ({{ $labels.instance }} {{ $labels.dir }})"
+          description: "备份目录最新文件距今 {{ $value | humanizeDuration }}，恢复点老化。请检查备份计划是否正常执行、备份目录磁盘是否可写。"
+
+      - alert: XuguBackupMissing
+        expr: xugu_backup_files{kind="BACKUP"} == 0 and on(instance) xugu_backup_plans_enabled > 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "备份计划已启用但无备份文件 ({{ $labels.instance }} {{ $labels.dir }})"
+          description: "存在启用的备份计划(xugu_backup_plans_enabled>0)，但备份目录无任何文件，说明备份未真正落地。请立即检查备份执行日志与目录权限。"
+
   - name: xugudb.host
     rules:
       # xugu_host_* 为 exporter 内置主机采集（gopsutil）。与数据库同机部署时即数据库

@@ -1,6 +1,6 @@
 # xugu-exporter 测试报告
 
-> 版本：v1.1.0　测试日期：2026-07-06 ~ 2026-07-09（含增量功能复测）　测试环境：XuguDB 12.0.0 单机（127.0.0.1:5138，Windows 11）
+> 版本：v1.2.0　测试日期：2026-07-06 ~ 2026-07-09（含增量功能复测）
 > 测试依据：docs/test-plan.md　执行工具：tools/verify（自动化）+ tools/check_dashboard_queries.py + promtool
 > 明细证据：docs/verify-report.md（用例级）、docs/field-validation-matrix.md（字段级）
 
@@ -19,7 +19,7 @@
 | 断库容错 | 通过 | xugu_up=0、进程不崩、恢复后自动回升 |
 | 抓取性能 | 通过 | 总耗时 ~1.5s（<10s 超时）；最慢域 errorlog（日志表 13.6 万行全扫，已 TTL 60s 缓存） |
 | 多平台构建 | 6/6 成功 | linux 386/amd64/arm64、windows amd64、darwin amd64/arm64（纯 Go 无 cgo） |
-| 面板渲染人工走查 | 通过 | 9 分区 65 面板，截图见 docs/screenshots/10-final-*.png |
+| 面板渲染人工走查 | 通过 | 10 分区 72 面板，截图见 docs/screenshots/10-final-*.png |
 
 ## 2. 测试过程中发现并修复的缺陷
 
@@ -41,7 +41,7 @@
 - CPU_LOAD 恒 50 桩值 → 服务器 CPU 改由 exporter 内置主机采集（gopsutil）提供；
 - 参考资料中 14 张表（SYS_CACHE_STATUS 等）实际不存在（资料错误，非版本缺失）。
 
-## 3.1 增量功能验证记录（v1.1.0 后期增量）
+## 3.1 增量功能验证记录（v1.2.0）
 
 | 功能 | 验证方式 | 结果 |
 |------|----------|------|

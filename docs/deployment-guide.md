@@ -1,6 +1,6 @@
 # xugu-exporter 部署说明手册
 
-> 适用版本：v1.1.0　适配数据库：XuguDB 12.x
+> 适用版本：v1.2.0　适配数据库：XuguDB 12.x
 > 三种部署方式按推荐顺序：Docker Compose（一键演示/评估）→ systemd（生产 Linux）→ 手工二进制。
 
 ---
@@ -91,7 +91,9 @@ macOS 运维机：darwin-amd64 / darwin-arm64（Apple Silicon）。
 | `scrape_timeout` | 10s | 每采集域 SQL 超时 |
 | `max_open_conns` | 4 | 连接池=采集并发度 |
 | `time_location` | Asia/Shanghai | 数据库墙钟时区（影响 uptime/事务时长等换算） |
-| `host_metrics` | true | 主机 CPU/内存/磁盘采集（异机部署设 false） |
+| `host_metrics` | true | 主机 CPU/内存/磁盘、进程存活、异常堆栈(trc)、备份文件采集（异机部署设 false） |
+| `trc_dirs` | [] | 异常堆栈文件(*.trc)附加扫描目录，默认自动发现数据库进程目录 |
+| `backup_dirs` | [] | 备份检测附加目录（安装根目录或备份目录），默认自动读 mount.ini 的 /BACKUP、/ARCH |
 | `set_slow_sql_time` | 0 | >0 时启动即 `SET slow_sql_time TO n`（毫秒），修正过短默认阈值 |
 | `default_ttl` | 0 | 给未设 ttl 的采集域统一加缓存，整体降低指标 SQL 频率 |
 | `disabled_groups` | [] | 按名称关停采集域（担心某条 SQL 影响性能时） |

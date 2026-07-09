@@ -1,6 +1,6 @@
 # 产品包清单与文件结构
 
-> xugu-exporter v1.1.0 成品包（`scripts/build-release.sh 1.1.0` 生成于 `dist/xugu-exporter-1.1.0/`）
+> xugu-exporter v1.2.0 成品包（`scripts/build-release.sh 1.2.0` 生成于 `dist/xugu-exporter-1.2.0/`）
 
 ## 产品包文件结构
 
@@ -18,9 +18,13 @@ xugu-exporter-1.1.0/
 │   ├── xugu-exporter.yml              # 运行配置模板（DSN/开关/性能三层控制，注释即文档）
 │   └── metrics-default.yml            # 内置指标定义副本（外置覆盖的起点，44 采集域）
 ├── dashboards/
-│   └── xugu-overview.json             # Grafana 仪表盘（9 分区 65 面板，导入即用）
+│   └── xugu-overview.json             # Grafana 仪表盘（10 分区 72 面板，导入即用）
 ├── rules/
 │   └── xugu-alerts.yml                # Prometheus 告警规则（25 条，中文说明）
+├── 手册/                              # 正式交付文档（DOCX + PDF，含封面/目录/页眉页脚）
+│   ├── 虚谷数据库监控系统 产品手册.docx / .pdf         # 功能规格·72面板图文详解·告警规格
+│   ├── 虚谷数据库监控系统 部署与运维手册.docx / .pdf   # 安装部署·配置·故障处理·系统字典参考
+│   └── 虚谷数据库监控系统 指标参考手册.docx / .pdf     # 88指标清单·采集SQL与解释·设计说明
 ├── scripts/
 │   └── diagnose-stuck-sql.sh          # 卡死 SQL 一键诊断（读取执行中语句的 OS 线程号并 pstack）
 ├── deploy/
@@ -29,16 +33,16 @@ xugu-exporter-1.1.0/
 │   ├── prometheus.yml                 # Prometheus 配置模板（含 server 资源 job）
 │   ├── grafana/provisioning/          # Grafana 自动装配（数据源+仪表盘）
 │   └── systemd/xugu-exporter.service  # Linux 生产部署单元模板
-└── docs/
+└── docs/                              # Markdown 源文档（正式文档的来源，便于检索/二次编辑）
     ├── deployment-guide.md            # 部署说明手册
-    ├── 产品手册.md                     # 产品手册（功能规格/使用说明/告警规格）
+    ├── 产品手册.md                     # 产品手册（功能规格/72面板图文详解/告警规格）
     ├── metrics-reference.md           # 指标清单与 SQL 对照（自动生成）
     ├── metrics-design.md              # 指标设计说明与版本迁移对照
     ├── test-report.md                 # 测试报告
     ├── field-validation-matrix.md     # 系统字典字段有效性参考
     ├── xugudb-reference-notes.md      # XuguDB 系统字典与运行行为参考
     ├── package-manifest.md            # 本清单
-    └── screenshots/                   # 功能图示（产品手册引用，7 张）
+    └── screenshots/                   # 功能图示（8 张全景/专项 + panels/ 逐面板 72 张）
 ```
 
 ## 仓库中额外的开发资产（不随包分发）
