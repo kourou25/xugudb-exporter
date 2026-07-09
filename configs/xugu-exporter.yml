@@ -1,0 +1,52 @@
+# xugu-exporter 运行配置示例
+#
+# 启动: xugu-exporter --config.file xugu-exporter.yml
+# DSN 也可用环境变量 XUGU_DSN 提供（优先级高于本文件），避免密码落盘。
+
+# 虚谷连接串。注意必须连接 SYSTEM 库（系统虚表仅系统库可读）。
+# 生产环境建议创建专用监控账号并授予 DBA 角色读权限，不要使用 SYSDBA。
+# 多 IP 负载均衡可用 IPS=ip1,ip2,ip3 代替 IP。
+dsn: "IP=127.0.0.1;DB=SYSTEM;User=SYSDBA;PWD=SYSDBA;Port=5138;CHAR_SET=UTF8"
+
+# /metrics 监听地址
+listen_address: ":9156"
+
+# 每个采集域的默认 SQL 超时
+scrape_timeout: 10s
+
+# 数据库连接池上限（即采集并发度）
+max_open_conns: 4
+
+# 数据库 DATETIME 字段的墙钟时区。虚谷驱动以 UTC 标签返回数据库本地墙钟时间，
+# exporter 按此时区重新解释为正确的 Unix 时刻（影响 uptime、事务时长、备份时间等）。
+# 默认 Asia/Shanghai；如数据库部署在其他时区请相应修改。
+time_location: "Asia/Shanghai"
+
+# 额外指标定义文件：同名采集域覆盖内置定义，新名追加。
+# 内置定义见仓库 configs/metrics-default.yml。
+metrics_files: []
+#  - ./metrics-custom.yml
+
+# 为 true 时完全不加载内置指标，只用 metrics_files
+disable_default_metrics: false
+
+# 按名称禁用部分内置采集域，例如基数较高的会话来源分布：
+disabled_groups: []
+#  - sessions_by_source
+
+# ── 性能与侵入性开关 ─────────────────────────────────────────────────
+# 担心指标 SQL 影响数据库性能时的三层控制：
+#  1) disabled_groups 按域关停；2) disable_default_metrics 全部关停只用自定义；
+#  3) default_ttl 给所有未显式设置 ttl 的采集域统一加结果缓存（整体降频）。
+# 例：default_ttl: 60s 后，即使 Prometheus 每 15s 抓取，每个域的 SQL 每 60s 才真正执行一次。
+default_ttl: 0s
+
+# 慢 SQL 阈值：>0 时 exporter 启动即执行 SET slow_sql_time TO <毫秒>。
+# 数据库默认阈值往往过短（如 100ms）导致慢SQL日志噪音过大，建议按业务设为 1000~3000。
+# 0 = 不修改数据库参数（默认，无侵入）。
+set_slow_sql_time: 0
+
+# 异常堆栈文件(*.trc)附加扫描目录（E19002 级崩溃检测）。
+# 默认自动发现本机虚谷进程的可执行/工作目录；自动发现失败时在此指定，如：
+# trc_dirs: ["/opt/xugu/bin"]
+trc_dirs: []

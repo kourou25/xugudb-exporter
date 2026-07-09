@@ -1,0 +1,61 @@
+# 一键演示栈：xugu-exporter + Prometheus + Grafana
+# 用法：
+#   cd deploy
+#   XUGU_DSN="IP=数据库IP;DB=SYSTEM;User=SYSDBA;PWD=SYSDBA;Port=5138;CHAR_SET=UTF8" docker compose up -d
+# 访问：
+#   Exporter   http://localhost:9156/metrics
+#   Prometheus http://localhost:9090
+#   Grafana    http://localhost:3000 (admin/admin)，仪表盘已自动导入
+services:
+  xugu-exporter:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: xugu-exporter
+    environment:
+      XUGU_DSN: "${XUGU_DSN:?请通过环境变量 XUGU_DSN 提供虚谷连接串}"
+    ports:
+      - "9156:9156"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: xugu-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../rules/xugu-alerts.yml:/etc/prometheus/rules/xugu-alerts.yml:ro
+      - prom-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: xugu-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # 服务器资源采集（CPU/内存/磁盘，供"服务器资源"面板行使用）。
+  # 演示栈中采集的是本 compose 宿主机；生产环境应在【数据库服务器】上部署
+  # node_exporter(Linux)/windows_exporter(Windows)，并在 prometheus.yml 中把
+  # 该地址加入 job: server 的 targets。
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: xugu-node-exporter
+    command: ["--path.rootfs=/host"]
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+volumes:
+  prom-data:
+  grafana-data:

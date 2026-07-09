@@ -1,0 +1,22 @@
+[Unit]
+Description=XuguDB Prometheus Exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+# 推荐用 EnvironmentFile 提供 DSN，避免密码出现在单元文件中
+# /etc/xugu-exporter/env 内容示例：
+#   XUGU_DSN=IP=127.0.0.1;DB=SYSTEM;User=MONITOR;PWD=xxx;Port=5138;CHAR_SET=UTF8
+EnvironmentFile=-/etc/xugu-exporter/env
+ExecStart=/usr/local/bin/xugu-exporter --config.file /etc/xugu-exporter/xugu-exporter.yml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,272 @@
+# 虚谷数据库 Prometheus 告警规则
+# 用法：在 prometheus.yml 的 rule_files 中引入本文件。
+# 阈值为通用建议值，请按业务负载调整。
+# 与指标定义(configs/metrics-default.yml)同步维护；指标口径与已知限制见其中 help。
+
+groups:
+  - name: xugudb.availability
+    rules:
+      - alert: XuguInstanceDown
+        expr: xugu_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "虚谷数据库实例宕机 ({{ $labels.instance }})"
+          description: "Exporter 已连续 1 分钟无法连接数据库，请立即检查数据库进程与网络。"
+
+      - alert: XuguExporterCollectorFailed
+        expr: xugu_collector_success == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "采集域持续失败 ({{ $labels.instance }} / {{ $labels.collector }})"
+          description: "采集域 {{ $labels.collector }} 已失败超过 10 分钟，对应面板将无数据，请检查 exporter 日志。"
+
+      - alert: XuguNodeRestarted
+        expr: time() - xugu_node_boot_timestamp_seconds < 300
+        labels:
+          severity: warning
+        annotations:
+          summary: "虚谷节点近期发生重启 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "节点启动时间在 5 分钟内，请确认是否为计划内重启。"
+
+  - name: xugudb.connections
+    rules:
+      - alert: XuguTooManySessions
+        expr: sum(xugu_sessions) by (instance) / sum(xugu_max_connections) by (instance) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "会话数接近上限 ({{ $labels.instance }})"
+          description: "当前会话数已超过最大连接数(max_conn_num)的 80%，持续 5 分钟。当前比例 {{ $value | humanizePercentage }}。"
+
+      - alert: XuguSessionsSaturated
+        expr: sum(xugu_sessions) by (instance) / sum(xugu_max_connections) by (instance) > 0.95
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "会话数即将耗尽 ({{ $labels.instance }})"
+          description: "当前会话数已超过最大连接数的 95%，新连接随时可能被拒绝。"
+
+  - name: xugudb.performance
+    rules:
+      # 说明：12.0.0 的缓冲命中计数器(BUFF_R_N/REQ_N)恒为 0（字段矩阵判无效），
+      # 无法计算缓冲命中率，原 XuguBufferHitRatioLow 告警已移除。
+      - alert: XuguSlowSQLBurst
+        expr: xugu_slowsql_recent > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "慢 SQL 激增 ({{ $labels.instance }})"
+          description: "近 10 分钟慢 SQL 达 {{ $value | printf \"%.0f\" }} 条（阈值 20），请查看 SYS_SLOWSQL_LOG 定位语句。"
+
+      - alert: XuguCheckpointLagHigh
+        expr: (xugu_xlog_write_position - xugu_xlog_checkpoint_position) > 2147483648
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WAL 检查点延迟过大 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "未做检查点的 WAL 超过 2GB，宕机恢复时间将变长，请检查检查点与刷盘配置。"
+
+      - alert: XuguLongStatement
+        expr: time() - xugu_session_oldest_statement_start_timestamp_seconds > 600
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在长时间执行的语句 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "有语句已连续执行超过 10 分钟，请在会话面板确认是否为失控查询。"
+
+  - name: xugudb.locks
+    rules:
+      - alert: XuguLockWaiting
+        expr: sum(xugu_lock_waiters) by (instance) > 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在持续锁等待 ({{ $labels.instance }})"
+          description: "表级锁等待已持续 3 分钟（当前 {{ $value | printf \"%.0f\" }} 个），请在仪表盘阻塞链面板定位持有者会话。注意：行级锁阻塞不产生本指标，表现为长事务。"
+
+      # 说明：12.0.0 实测行锁交叉死锁不被自动检测（互等 20 分钟无检出、DEAD_LOCK_N 恒 0），
+      # 原 XuguDeadlockOccurred 告警失去数据源已移除；死锁在监控上表现为一组互等的长事务，
+      # 由 XuguLongTransaction 兜底发现后需人工 kill 会话。
+      - alert: XuguLongTransaction
+        expr: time() - xugu_transaction_oldest_start_timestamp_seconds > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在长事务 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "最老事务已运行超过 30 分钟。长事务阻碍 UNDO 回收并放大锁冲突；若多个事务长时间互相不动，可能是未被检测的行锁死锁。排查 SYS_ALL_LOWNERS 定位事务后用 EXEC DBMS_DBA.KILL_TRANS(节点ID,事务ID) 终止。"
+
+      - alert: XuguTransIdSpanHigh
+        expr: xugu_transaction_id_span > 3000000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "活动事务号跨度过大 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "最大与最小活动事务号之差 {{ $value | printf \"%.0f\" }} 已超 300 万（600 万将触发 L06 陈旧事务异常），说明存在长期不结束的事务，请尽快定位处理。"
+
+  - name: xugudb.capacity
+    rules:
+      # 说明：数据文件为自动扩展（MAX_SIZE=-1 按 STEP_SIZE 增长），"已分配空间使用率"高
+      # 只意味着即将触发扩展，不构成容量风险，故不设使用率告警；容量风险以数据文件所在
+      # 磁盘的剩余空间为准（XuguHostDiskLow / XuguHostDiskFullIn7Days）。
+      - alert: XuguTablespaceMediaError
+        expr: xugu_tablespace_media_error == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "表空间介质错误 ({{ $labels.instance }} {{ $labels.space }})"
+          description: "表空间 {{ $labels.space }} 报告介质错误，可能存在磁盘故障，请立即检查存储设备。"
+
+      - alert: XuguHostDiskFullIn7Days
+        expr: |
+          predict_linear(xugu_host_disk_free_bytes[1d], 7*86400) < 0
+          and xugu_host_disk_free_bytes > 0
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "磁盘预计 7 天内写满 ({{ $labels.instance }} {{ $labels.mountpoint }})"
+          description: "按最近 1 天趋势外推，分区 {{ $labels.mountpoint }} 将在 7 天内耗尽。数据文件自动扩展依赖该分区剩余空间，请提前扩容或清理。"
+
+  - name: xugudb.host
+    rules:
+      # xugu_host_* 为 exporter 内置主机采集（gopsutil）。与数据库同机部署时即数据库
+      # 服务器资源；异机部署请关闭(host_metrics: false)改用 node_exporter 并自行配告警。
+      - alert: XuguHostMemoryLow
+        expr: 100 * xugu_host_memory_available_bytes / xugu_host_memory_total_bytes < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "服务器可用内存不足 10% ({{ $labels.instance }})"
+          description: "可用内存 {{ $value | printf \"%.1f\" }}%，存在 OOM 风险（数据库进程可能被系统终止），请排查内存占用。"
+
+      - alert: XuguHostDiskLow
+        expr: 100 * xugu_host_disk_free_bytes / xugu_host_disk_total_bytes < 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "磁盘分区剩余不足 10% ({{ $labels.instance }} {{ $labels.mountpoint }})"
+          description: "分区 {{ $labels.mountpoint }} 剩余 {{ $value | printf \"%.1f\" }}%；数据文件自动扩展的硬限制是磁盘空间，请及时扩容或清理。"
+
+      - alert: XuguDatafileExtended
+        expr: delta(xugu_datafile_bytes[30m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "数据文件发生自动扩展 ({{ $labels.instance }} {{ $labels.space }})"
+          description: "数据文件组 {{ $labels.space }} 近 30 分钟增长 {{ $value | humanize1024 }}B（按 STEP_SIZE 自动扩展）。频繁扩展说明写入量大，请关注磁盘剩余。"
+
+  - name: xugudb.fatal
+    rules:
+      - alert: XuguFatalError
+        expr: increase(xugu_fatal_errors_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "发生致命/高危错误 E{{ $labels.err_code }} ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "错误码含义：19002=系统存取保护(SIGSEGV，大概率进程崩溃并在数据库 bin/工作目录生成 exception_stack.trc) 19003=非法指令 19016/19017=内存分配/释放失败 14001=死锁。请立即检查数据库进程状态与 trc 文件。"
+
+      - alert: XuguTrcFileDetected
+        expr: xugu_trc_files > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "检测到异常堆栈跟踪文件 ({{ $labels.instance }} {{ $labels.dir }})"
+          description: "数据库目录存在 *.trc 文件（通常为 E19002 崩溃生成的 exception_stack.trc）。请将文件提交原厂映射解析；处理完成后移走该文件以解除告警。文件大小与生成时间见 xugu_trc_file_size_bytes / xugu_trc_file_mtime_seconds。"
+
+      - alert: XuguTrcFileGrowing
+        expr: increase(xugu_trc_file_size_bytes[30m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "异常堆栈文件出现新增内容 ({{ $labels.instance }} {{ $labels.file }})"
+          description: "exception_stack.trc 为追加写文件，内容增长意味着刚刚发生了新的 E19002 级异常（即使旧文件一直存在也能捕获新崩溃）。请立即检查数据库进程状态并将文件提交原厂。"
+
+      - alert: XuguDBProcessMissing
+        expr: xugu_host_db_processes == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "本机未检测到虚谷数据库进程 ({{ $labels.instance }})"
+          description: "虚谷为单进程架构（每节点一个进程），同机部署时检测不到进程说明数据库已退出，请检查 exception_stack.trc 与事件日志。异机部署请忽略本告警或关闭 host_metrics。"
+
+  - name: xugudb.logs
+    rules:
+      - alert: XuguErrorLogBurst
+        expr: sum(increase(xugu_errorlog_total{level="ERROR"}[5m])) by (instance) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "错误日志激增 ({{ $labels.instance }})"
+          description: "5 分钟内新增 ERROR 日志超过 50 条（当前 {{ $value | printf \"%.0f\" }}），请查看 SYS_ERROR_LOG。"
+
+  - name: xugudb.cluster
+    rules:
+      - alert: XuguClusterNodeAbnormal
+        expr: xugu_node_state != 2
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "集群节点状态异常 ({{ $labels.instance }} 节点{{ $labels.node }})"
+          description: "节点状态码为 {{ $value | printf \"%.0f\" }}（2 为正常在线），请检查节点进程与心跳网络。"
+
+      - alert: XuguClusterNodeCountChanged
+        expr: sum(xugu_cluster_nodes) by (instance) != sum(xugu_cluster_nodes offset 10m) by (instance)
+        labels:
+          severity: warning
+        annotations:
+          summary: "集群节点数量发生变化 ({{ $labels.instance }})"
+          description: "10 分钟内集群注册节点数发生变化，请确认是否为计划内扩缩容。"
+
+      - alert: XuguGlobalLockWaiting
+        expr: xugu_global_lock_waiters > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "集群全局锁等待过多 ({{ $labels.instance }})"
+          description: "全局锁等待数持续超过 10，分布式事务可能出现跨节点阻塞。"
+
+      - alert: XuguStoreAbnormal
+        expr: sum(xugu_gstores{sta!="1"}) by (instance) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在非健康态存储段 ({{ $labels.instance }})"
+          description: "有存储段状态码 ≠1 持续 30 分钟（健康态实测为 1）。扩容/修复期间属正常，长期不恢复请检查存储副本。"
+
+  - name: xugudb.security
+    rules:
+      - alert: XuguAccountLocked
+        expr: xugu_users_locked > 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "存在被锁定的数据库账号 ({{ $labels.instance }})"
+          description: "{{ $value | printf \"%.0f\" }} 个账号处于锁定状态，可能由连续登录失败触发，请确认是否为攻击行为。"
+
+      - alert: XuguForbiddenIPDetected
+        expr: increase(xugu_forbidden_ips[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "出现新的封禁 IP ({{ $labels.instance }})"
+          description: "30 分钟内有 IP 因连续登录失败被封禁，请核实是否存在暴力破解尝试。"

@@ -1,0 +1,726 @@
+# xugu-exporter 内置指标定义
+#
+# 基于 XuguDB 12.0.0 真实库逐字段验证后编写（证据：docs/field-validation-matrix.md，
+# 用例：docs/test-plan.md，2026-07-06 全量 83 用例通过）。
+#
+# 与上一版的重要差异（依据字段有效性矩阵）：
+# - 移除恒零无效指标：REQ_N/BUFF_R_N(缓冲命中)、NET_R/W_BYTES(网络)、LOCK_REQ_N、
+#   LOCK_WAIT_N、DEAD_LOCK_N(死锁计数)，以及 SYS_MONITORS 中同源的 9 个死键
+# - 活跃会话口径改用 SYS_ALL_THD_SESSION（SYS_SESSIONS.SQL 列实测恒 NULL，不可用）
+# - 新增：事务ID高水位(TPS 近似)、会话状态分布、会话内存、最长执行语句、
+#   慢 SQL 近10分钟窗口、内部内存池（替代原 42 键原样透传的 monitors 域）
+# - 锁等待（SYS_ALL_LWAITERS）实测仅表级锁可见，行级锁阻塞不可见，help 已注明
+#
+# 说明：
+# - 统一使用 SYS_ALL_* 全局虚表：单机与分布式同一套逻辑（单机=1个节点）
+# - label 名由 SQL 列别名控制（引擎按列名大小写不敏感匹配）
+# - DATETIME 列自动转为 Unix 时间戳秒，PromQL 用 time()-x 计算"年龄"
+# - mode: keyvalue 用于 name/value 形态的表
+# - cluster_only: true 的域仅在检测到多节点集群时采集
+# - ttl: 低频指标的结果缓存时长，降低对数据库的压力
+
+metrics:
+  # ── 1. 可用性与版本 ────────────────────────────────────────────────
+  - name: info
+    ttl: 300s
+    query: SELECT VERSION() AS VERSION FROM DUAL
+    metrics:
+      - name: xugu_info
+        value: 1
+        labels: [version]
+        help: "虚谷数据库版本信息（值恒为1，版本在 label 中）"
+
+  - name: node_info
+    query: |
+      SELECT NODE_ID AS NODE, NODE_TYPE, NODE_STATE, CPU_LOAD,
+             STORE_NUM, MAJOR_NUM, BOOT_TIME
+      FROM SYS_CLUSTERS
+    metrics:
+      - name: xugu_node_state
+        column: NODE_STATE
+        labels: [node, node_type]
+        help: "节点状态码：0=未联机 1=刚加入 2=正常运行 3=出错 4=宕机（官方文档口径）"
+      - name: xugu_node_cpu_load_percent
+        column: CPU_LOAD
+        labels: [node]
+        help: "节点 CPU 负载百分比（12.0.0 单机实测恒为 50，疑似未实现的桩值，仅供集群版参考）"
+      - name: xugu_node_boot_timestamp_seconds
+        column: BOOT_TIME
+        labels: [node]
+        help: "节点启动时间(Unix秒)，uptime = time() - 本值"
+      - name: xugu_node_stores
+        column: STORE_NUM
+        labels: [node]
+        help: "节点存储段总数"
+      - name: xugu_node_major_stores
+        column: MAJOR_NUM
+        labels: [node]
+        help: "节点主存储段数（分布式下 < STORE_NUM 表示存在副本/修复中）"
+
+  # ── 2. 会话与连接 ──────────────────────────────────────────────────
+  - name: sessions
+    query: |
+      SELECT NODEID AS NODE, COUNT(*) AS CNT, SUM(MEM_SIZE) AS MEM_BYTES
+      FROM SYS_ALL_SESSIONS GROUP BY NODEID
+    metrics:
+      - name: xugu_sessions
+        column: CNT
+        labels: [node]
+        help: "当前会话总数"
+      - name: xugu_sessions_memory_bytes
+        column: MEM_BYTES
+        labels: [node]
+        help: "全部会话占用内存合计(字节)"
+
+  # 活跃会话：以线程-会话绑定表为准。SYS_SESSIONS.SQL 列仅在 prepare 语句时有值
+  # （官方文档与实测一致），不能作为通用活跃判定；
+  # 出现在 SYS_ALL_THD_SESSION 中的会话即正在执行语句的会话（含本采集连接自身）。
+  - name: sessions_active
+    query: |
+      SELECT T.NODEID AS NODE, COUNT(*) AS ACTIVE, MIN(S.CMD_START_T) AS OLDEST_CMD
+      FROM SYS_ALL_THD_SESSION T
+      JOIN SYS_ALL_SESSIONS S ON T.NODEID=S.NODEID AND T.SESSION_ID=S.SESSION_ID
+      GROUP BY T.NODEID
+    metrics:
+      - name: xugu_sessions_active
+        column: ACTIVE
+        labels: [node]
+        help: "正在执行语句的会话数(SYS_ALL_THD_SESSION 口径，含 exporter 自身)"
+      - name: xugu_session_oldest_statement_start_timestamp_seconds
+        column: OLDEST_CMD
+        labels: [node]
+        help: "运行中最久语句的开始时间(Unix秒)，最长语句时长 = time() - 本值"
+
+  - name: sessions_by_status
+    query: |
+      SELECT NODEID AS NODE, STATUS, COUNT(*) AS CNT
+      FROM SYS_ALL_SESSIONS GROUP BY NODEID, STATUS
+    metrics:
+      - name: xugu_sessions_by_status
+        column: CNT
+        labels: [node, status]
+        help: "按状态码分组的会话数(实测 112=空闲 114=执行中)"
+
+  - name: sessions_by_source
+    query: |
+      SELECT NODEID AS NODE, DB_NAME AS DB, USER_NAME AS USERNAME, COUNT(*) AS CNT
+      FROM SYS_ALL_SESSIONS GROUP BY NODEID, DB_NAME, USER_NAME
+    metrics:
+      - name: xugu_sessions_by_source
+        column: CNT
+        labels: [node, db, username]
+        help: "按数据库/用户分组的会话数"
+
+  - name: max_connections
+    ttl: 300s
+    query: |
+      SELECT NODEID AS NODE, TO_NUMBER(VAR_VALUE) AS MAX_CONN
+      FROM SYS_ALL_VARS WHERE VAR_NAME='max_conn_num'
+    metrics:
+      - name: xugu_max_connections
+        column: MAX_CONN
+        labels: [node]
+        help: "节点最大连接数(max_conn_num)；集群总容量 = sum(本指标)"
+
+  # ── 3. 事务 ───────────────────────────────────────────────────────
+  - name: transactions
+    query: |
+      SELECT NODEID AS NODE, COUNT(*) AS CNT, MIN(START_T) AS OLDEST
+      FROM SYS_ALL_TRANS GROUP BY NODEID
+    metrics:
+      - name: xugu_transactions_active
+        column: CNT
+        labels: [node]
+        help: "活跃事务数。注意：等待行锁且尚未获得首个锁的事务不在此列（实测）"
+      - name: xugu_transaction_oldest_start_timestamp_seconds
+        column: OLDEST
+        labels: [node]
+        help: "最老活跃事务开始时间(Unix秒)。长事务持续增长可能是行锁互等死锁——12.0.0 死锁不被自动检测(实测互等20分钟无检出)，需人工介入"
+
+  # ── 4. 核心运行计数器（IO / WAL / 事务ID，来自 SYS_ALL_RUN_INFO）────
+  # 已验证活字段才保留：REQ_N/BUFF_R_N/NET_*/LOCK_REQ_N/LOCK_WAIT_N/DEAD_LOCK_N
+  # 在 12.0.0 恒为 0（矩阵判"无效-恒零"），一律不再暴露。
+  # 磁盘读写为懒刷盘语义：数据全在缓冲池时短期可能持平，属正常。
+  - name: run_info
+    query: |
+      SELECT NODEID AS NODE, DISK_R_N, DISK_R_BYTES, DISK_W_N, DISK_W_BYTES,
+             ACT_TRANS_NUM, MAX_TRANS_ID, XLOG_WPOS, XLOG_CKPT, FREE_STO_N,
+             MAX_TRANS_ID-MIN_TRANS_ID AS TRANS_SPAN
+      FROM SYS_ALL_RUN_INFO
+    metrics:
+      - { name: xugu_disk_reads_total,          column: DISK_R_N,     type: counter, labels: [node], help: "累计磁盘物理读次数(缓冲全命中时不增长)" }
+      - { name: xugu_disk_read_bytes_total,     column: DISK_R_BYTES, type: counter, labels: [node], help: "累计磁盘物理读字节数" }
+      - { name: xugu_disk_writes_total,         column: DISK_W_N,     type: counter, labels: [node], help: "累计磁盘物理写次数(脏页懒刷盘，写入首先体现在 WAL)" }
+      - { name: xugu_disk_written_bytes_total,  column: DISK_W_BYTES, type: counter, labels: [node], help: "累计磁盘物理写字节数" }
+      - { name: xugu_active_transactions,       column: ACT_TRANS_NUM, labels: [node], help: "当前活跃事务数(RUN_INFO 口径)" }
+      - { name: xugu_transaction_id_max,        column: MAX_TRANS_ID, labels: [node], help: "事务ID高水位(持久化,重启不清零)。rate() 即事务开启速率，可作 TPS 近似(含内部事务)" }
+      - { name: xugu_xlog_write_position,       column: XLOG_WPOS,    labels: [node], help: "WAL 日志写入位置(字节,持久化)。rate() 即 WAL 写入速率，是写负载的实时指标" }
+      - { name: xugu_xlog_checkpoint_position,  column: XLOG_CKPT,    labels: [node], help: "WAL 检查点位置(字节,持久化)，检查点延迟 = write_position - 本值" }
+      - { name: xugu_free_stores,               column: FREE_STO_N,   labels: [node], help: "空闲存储段数量" }
+      - { name: xugu_transaction_id_span,       column: TRANS_SPAN,   labels: [node], help: "最大与最小活动事务号之差。超过 600万 会触发 L06 陈旧事务异常（官方文档），持续增长说明有事务长期不结束" }
+
+  # ── 5. 当前持有锁（按模式透视，字段已验证活）──────────────────────
+  - name: locks_by_mode
+    query: |
+      SELECT NODEID AS NODE, 'S'   AS MODE, S_LOCK_N   AS CNT FROM SYS_ALL_RUN_INFO UNION ALL
+      SELECT NODEID, 'X',   X_LOCK_N   FROM SYS_ALL_RUN_INFO UNION ALL
+      SELECT NODEID, 'IS',  IS_LOCK_N  FROM SYS_ALL_RUN_INFO UNION ALL
+      SELECT NODEID, 'IX',  IX_LOCK_N  FROM SYS_ALL_RUN_INFO UNION ALL
+      SELECT NODEID, 'SIX', SIX_LOCK_N FROM SYS_ALL_RUN_INFO
+    metrics:
+      - name: xugu_locks
+        column: CNT
+        labels: [node, mode]
+        help: "当前持有锁数量(按锁模式 S/X/IS/IX/SIX)"
+
+  # ── 6. 锁等待与阻塞链 ─────────────────────────────────────────────
+  # 实测限制：SYS_ALL_LWAITERS 仅记录表级锁(LOCK TABLE/DDL)等待；
+  # 行级锁(UPDATE 同行)阻塞不会出现在任何锁等待视图中，只能靠长事务指标间接发现。
+  - name: lock_waiters
+    query: |
+      SELECT (SELECT COUNT(*) FROM SYS_ALL_LWAITERS) AS LWAIT,
+             (SELECT COUNT(*) FROM SYS_ALL_LOWNERS)  AS LOWN
+      FROM DUAL
+    metrics:
+      - name: xugu_lock_waiters
+        column: LWAIT
+        help: "当前等待锁的事务数(仅表级锁可见；行锁阻塞不可见，靠长事务发现)"
+      - name: xugu_lock_owners
+        column: LOWN
+        help: "当前持有锁的事务数"
+
+  # 阻塞链：锁类型枚举与对象解析依据官方文档（LOCK_ID 低32位=对象ID，高位含库ID；
+  # 对象名从 SYS_OBJECTS 解析，系统表回落 SYS_SYSTEM_TABLES）。
+  - name: lock_wait_detail
+    query: |
+      SELECT W.NODEID AS NODE, W.WAIT_TID,
+             CASE W.LOCK_TYPE WHEN 1 THEN '库级' WHEN 2 THEN '对象操作' WHEN 3 THEN '对象存储维护'
+                  WHEN 5 THEN '全局存储' WHEN 6 THEN '局部存储读写' WHEN 7 THEN '局部存储迁移'
+                  WHEN 8 THEN '事务' WHEN 9 THEN '用户名' WHEN 10 THEN '数据装载'
+                  WHEN 11 THEN '全局存储修复' WHEN 12 THEN '表分区扩展' WHEN 13 THEN '全局临时表'
+                  ELSE TO_CHAR(W.LOCK_TYPE) END AS LOCK_KIND,
+             BIT_AND(W.LOCK_ID,4294967295) AS OBJ_ID,
+             COALESCE(OB.OBJ_NAME, ST.TABLE_NAME, '') AS OBJ_NAME,
+             O.OWNER_TID, O.OWNER_SID, O.LOCK_LEVEL AS OWNER_LEVEL
+      FROM SYS_ALL_LWAITERS W
+      JOIN SYS_ALL_LOWNERS O
+        ON W.LOCK_TYPE=O.LOCK_TYPE AND W.LOCK_ID=O.LOCK_ID AND W.NODEID=O.NODEID
+      LEFT JOIN SYS_OBJECTS OB ON W.LOCK_TYPE IN (2,3,10,12,13)
+        AND OB.OBJ_ID=BIT_AND(W.LOCK_ID,4294967295)
+        AND OB.DB_ID=BIT_AND(TRUNC(W.LOCK_ID/4294967296),16777215)
+      LEFT JOIN SYS_SYSTEM_TABLES ST ON W.LOCK_TYPE IN (2,3,10,12,13)
+        AND ST.TABLE_ID=BIT_AND(W.LOCK_ID,4294967295) AND OB.OBJ_ID IS NULL
+    metrics:
+      - name: xugu_lock_wait_info
+        value: 1
+        labels: [node, wait_tid, lock_kind, obj_id, obj_name, owner_tid, owner_sid, owner_level]
+        help: "锁等待阻塞链：等待事务 wait_tid 被会话 owner_sid(事务 owner_tid) 阻塞，含锁类型与对象名。仅表级锁场景有数据（行锁等待不注册到锁视图）"
+
+  # 当前持有的排他类锁明细（X/IX/SIX，最多 20 条）：定位谁锁了什么对象。
+  - name: lock_owner_detail
+    query: |
+      SELECT O.NODEID AS NODE, O.OWNER_SID, O.OWNER_TID, O.LOCK_LEVEL,
+             CASE O.LOCK_TYPE WHEN 1 THEN '库级' WHEN 2 THEN '对象操作' WHEN 3 THEN '对象存储维护'
+                  WHEN 5 THEN '全局存储' WHEN 6 THEN '局部存储读写' WHEN 7 THEN '局部存储迁移'
+                  WHEN 8 THEN '事务' WHEN 9 THEN '用户名' WHEN 10 THEN '数据装载'
+                  WHEN 11 THEN '全局存储修复' WHEN 12 THEN '表分区扩展' WHEN 13 THEN '全局临时表'
+                  ELSE TO_CHAR(O.LOCK_TYPE) END AS LOCK_KIND,
+             COALESCE(OB.OBJ_NAME, ST.TABLE_NAME, '') AS OBJ_NAME
+      FROM SYS_ALL_LOWNERS O
+      LEFT JOIN SYS_OBJECTS OB ON O.LOCK_TYPE IN (2,3,10,12,13)
+        AND OB.OBJ_ID=BIT_AND(O.LOCK_ID,4294967295)
+        AND OB.DB_ID=BIT_AND(TRUNC(O.LOCK_ID/4294967296),16777215)
+      LEFT JOIN SYS_SYSTEM_TABLES ST ON O.LOCK_TYPE IN (2,3,10,12,13)
+        AND ST.TABLE_ID=BIT_AND(O.LOCK_ID,4294967295) AND OB.OBJ_ID IS NULL
+      WHERE O.LOCK_LEVEL IN ('X','IX','SIX')
+        AND ST.TABLE_NAME IS NULL  -- 过滤系统虚表自锁（exporter 采集查询自身产生的噪音）
+      LIMIT 20
+    metrics:
+      - name: xugu_lock_owner_info
+        value: 1
+        labels: [node, owner_sid, owner_tid, lock_level, lock_kind, obj_name]
+        help: "当前持有排他类锁(X/IX/SIX)的明细：会话/事务/锁级别/锁类型/对象名（最多20条；已过滤系统虚表自锁噪音，无业务锁时为空）"
+
+  - name: glock_waiters
+    cluster_only: true
+    query: |
+      SELECT (SELECT COUNT(*) FROM SYS_ALL_GWAITERS) AS GWAIT,
+             (SELECT COUNT(*) FROM SYS_ALL_GLOCKS)   AS GLOCK
+      FROM DUAL
+    metrics:
+      - name: xugu_global_lock_waiters
+        column: GWAIT
+        help: "集群全局锁等待数(分布式)"
+      - name: xugu_global_locks
+        column: GLOCK
+        help: "集群全局锁数量。注意：非排他锁的全局锁为懒释放（有排他请求时才释放），数量偏大且缓慢累积属正常，不宜直接告警"
+
+  # ── 7. 集群消息（仅分布式；单机实测恒 0）──────────────────────────
+  - name: cluster_msgs
+    cluster_only: true
+    query: |
+      SELECT NODEID AS NODE, SEND_MSG_N, RECV_MSG_N FROM SYS_ALL_RUN_INFO
+    metrics:
+      - { name: xugu_cluster_messages_sent_total,     column: SEND_MSG_N, type: counter, labels: [node], help: "集群节点间累计发送消息数" }
+      - { name: xugu_cluster_messages_received_total, column: RECV_MSG_N, type: counter, labels: [node], help: "集群节点间累计接收消息数" }
+
+  # ── 7b. 工作线程（TYPE=9，官方运维脚本推荐点位）─────────────────────
+  # 实测限制：行锁等待的线程不进入等待状态集(2,4,5,6,8,11,12)，
+  # 该计数只反映表锁/内部资源等待。
+  - name: worker_threads
+    query: |
+      SELECT NODEID AS NODE, STATE AS CODE,
+             CASE STATE WHEN 0 THEN '空闲' WHEN 1 THEN '运行中'
+                  WHEN 2 THEN '等buffer加锁' WHEN 3 THEN '等自由buffer内存'
+                  WHEN 4 THEN '等全局锁' WHEN 5 THEN '等全局锁(限时)'
+                  WHEN 6 THEN '等本地锁' WHEN 7 THEN '等本地锁(限时)'
+                  WHEN 8 THEN '等局部锁释放' WHEN 9 THEN '等局部锁(限时)'
+                  WHEN 10 THEN '等事务提交' WHEN 11 THEN '等redo日志内存'
+                  WHEN 12 THEN '等日志写盘' WHEN 13 THEN '等消息发送窗口'
+                  WHEN 14 THEN '等数据同步' WHEN 15 THEN '等RFC调用返回'
+                  WHEN 16 THEN '等RMC调用返回' WHEN 17 THEN '等RBC发送窗口'
+                  WHEN 18 THEN '等RBC调用返回' WHEN 19 THEN 'RPC读取等数据'
+                  WHEN 20 THEN 'RPC发送等窗口' WHEN 21 THEN '弹射器读等数据'
+                  WHEN 22 THEN '弹射器等发送窗口' WHEN 23 THEN '弹射器等管线取消'
+                  WHEN 24 THEN '等代理事务提交' WHEN 25 THEN '等变更日志记载'
+                  WHEN 26 THEN '等buffer写盘'
+                  ELSE '状态'||STATE END AS STATE,
+             COUNT(*) AS CNT
+      FROM SYS_ALL_THD_STATUS WHERE TYPE=9 GROUP BY NODEID, STATE
+    metrics:
+      - name: xugu_worker_threads
+        column: CNT
+        labels: [node, state, code]
+        help: "工作线程数按状态(TYPE=9，状态语义与 v12.9 官方文档逐条对齐)；等锁/等资源状态短期波动属正常"
+
+
+  - name: worker_threads_waiting
+    query: |
+      SELECT COUNT(*) AS CNT FROM SYS_ALL_THD_STATUS
+      WHERE TYPE=9 AND STATE IN (2,4,5,6,8,11,12)
+    metrics:
+      - name: xugu_worker_threads_lock_waiting
+        column: CNT
+        help: "处于锁/资源等待状态的工作线程数（官方状态集；行锁等待不计入，实测）"
+
+  - name: threads_memory
+    query: |
+      SELECT NODEID AS NODE,
+             CASE TYPE WHEN 1 THEN '主线程' WHEN 4 THEN '空闲buffer保障' WHEN 5 THEN '脏页提交'
+                  WHEN 6 THEN 'buffer写盘' WHEN 7 THEN 'redo写盘' WHEN 9 THEN '任务处理'
+                  WHEN 12 THEN '系统事件' WHEN 13 THEN '存储维护' WHEN 18 THEN '死锁检测'
+                  WHEN 19 THEN '全局锁' WHEN 23 THEN '大buffer交换' WHEN 27 THEN '回滚维护'
+                  WHEN 29 THEN '自动分析' ELSE '类型'||TYPE END AS TYPE,
+             COUNT(*) AS CNT, SUM(MEM_SIZE) AS MEM
+      FROM SYS_ALL_THD_STATUS GROUP BY NODEID, TYPE
+    metrics:
+      - name: xugu_threads
+        column: CNT
+        labels: [node, type]
+        help: "线程数按类型(中文语义见官方线程类型表)"
+      - name: xugu_threads_memory_bytes
+        column: MEM
+        labels: [node, type]
+        help: "线程持有内存按类型合计(字节)"
+
+  # 正在执行的 SQL 明细（最多 10 条，值为已执行秒数）
+  - name: active_statements
+    query: |
+      SELECT T.NODEID AS NODE, T.SESSION_ID, T.THD_ID, T.USER_NAME AS USERNAME,
+             REPLACE(REPLACE(SUBSTR(T.SQL,1,500),CHR(10),' '),CHR(9),' ') AS SQL,
+             MAX((SYSDATE - S.CMD_START_T)*86400) AS SECS
+      FROM SYS_ALL_THD_SESSION T
+      JOIN SYS_ALL_SESSIONS S ON T.NODEID=S.NODEID AND T.SESSION_ID=S.SESSION_ID
+      GROUP BY T.NODEID, T.SESSION_ID, T.THD_ID, T.USER_NAME,
+               REPLACE(REPLACE(SUBSTR(T.SQL,1,500),CHR(10),' '),CHR(9),' ')
+      ORDER BY SECS DESC LIMIT 10
+    metrics:
+      - name: xugu_active_statement_duration_seconds
+        column: SECS
+        labels: [node, session_id, thd_id, username, sql]
+        help: "正在执行的语句明细(最多10条)：会话/OS线程号/用户/语句(截断500字符)在 label，值为已执行秒数(含 exporter 自身查询)。语句卡死时可对 thd_id 执行 pstack 抓取线程堆栈"
+
+  - name: cluster_msg_quality
+    cluster_only: true
+    mode: keyvalue
+    key_column: TARG_NAME
+    value_column: TARG_VALUE
+    key_label: name
+    metric_name: xugu_cluster_message_events_total
+    labels: [NODE]
+    help: "集群网络质量计数(RESEND_MSG_NUM=重发包 DISCARD_MSG_NUM=丢弃包)，短期增长说明节点间网络异常"
+    query: |
+      SELECT NODEID AS NODE, TARG_NAME, TARG_VALUE FROM SYS_ALL_MONITORS
+      WHERE TARG_NAME IN ('RESEND_MSG_NUM','DISCARD_MSG_NUM')
+
+  # ── 8. 内存与缓冲区 ───────────────────────────────────────────────
+  - name: memory
+    query: |
+      SELECT NODEID AS NODE,
+             BUFF_SIZE*TOTAL_BUFF_NUM  AS BUFF_TOTAL_BYTES,
+             BUFF_SIZE*FREE_BUFF_NUM   AS BUFF_FREE_BYTES,
+             BUFF_SIZE*DIRTY_BUFF_NUM  AS BUFF_DIRTY_BYTES,
+             BUFF_SIZE*LRU_BUFF_NUM    AS BUFF_LRU_BYTES,
+             SGA_BLK_SIZE*TOTAL_SGA_MEM AS SGA_TOTAL_BYTES,
+             SGA_BLK_SIZE*FREE_SGA_MEM  AS SGA_FREE_BYTES,
+             SGA_BLK_SIZE*PEAK_SGA_MEM  AS SGA_PEAK_BYTES,
+             SWAP_BLK_SIZE*TOTAL_SWAP_MEM AS SWAP_TOTAL_BYTES,
+             SWAP_BLK_SIZE*FREE_SWAP_MEM  AS SWAP_FREE_BYTES
+      FROM SYS_ALL_MEM_STATUS
+    metrics:
+      - { name: xugu_buffer_pool_bytes,       column: BUFF_TOTAL_BYTES, labels: [node], help: "数据缓冲池总大小(字节)" }
+      - { name: xugu_buffer_pool_free_bytes,  column: BUFF_FREE_BYTES,  labels: [node], help: "数据缓冲池空闲大小(字节)，缓冲池使用率=1-free/total" }
+      - { name: xugu_buffer_pool_dirty_bytes, column: BUFF_DIRTY_BYTES, labels: [node], help: "脏页占用大小(字节)" }
+      - { name: xugu_buffer_pool_lru_bytes,   column: BUFF_LRU_BYTES,   labels: [node], help: "LRU 链上页面大小(字节)" }
+      - { name: xugu_sga_bytes,               column: SGA_TOTAL_BYTES,  labels: [node], help: "SGA 总大小(字节)" }
+      - { name: xugu_sga_free_bytes,          column: SGA_FREE_BYTES,   labels: [node], help: "SGA 空闲大小(字节)" }
+      - { name: xugu_sga_peak_bytes,          column: SGA_PEAK_BYTES,   labels: [node], help: "SGA 峰值用量(字节)" }
+      - { name: xugu_swap_bytes,              column: SWAP_TOTAL_BYTES, labels: [node], help: "交换区总大小(字节)" }
+      - { name: xugu_swap_free_bytes,         column: SWAP_FREE_BYTES,  labels: [node], help: "交换区空闲大小(字节)" }
+
+  # ── 9. 内部内存池（SYS_ALL_MONITORS 中唯一有独立价值的活字段）───────
+  # 原 monitors 域 42 键原样透传已废弃：其中 9 键恒零无效、21 键与 RUN_INFO 重复，
+  # 仅 12 个 *_MEM 内存池键有独立监控价值（证据见字段矩阵）。
+  - name: memory_pools
+    query: |
+      SELECT NODEID AS NODE, TARG_NAME, TARG_VALUE
+      FROM SYS_ALL_MONITORS WHERE TARG_NAME LIKE '%MEM'
+    mode: keyvalue
+    key_column: TARG_NAME
+    value_column: TARG_VALUE
+    key_label: pool
+    metric_name: xugu_memory_pool_bytes
+    labels: [NODE]
+    help: "内部内存池占用字节数(CATA=字典 LOCK=锁 TRAN=事务 MSG=消息 NET=网络 MODI=修改 DLCHK=死锁检测等)"
+
+  # ── 10. 容量：表空间与数据文件 ────────────────────────────────────
+  # GSYS/UNDO_SYS/LSYS 等系统空间按需整块分配，FREE 恒为 0 属正常形态，
+  # 使用率类面板/告警只应针对 DATA_SPACE/TEMP_SPACE 计算。
+  - name: tablespaces
+    ttl: 60s
+    query: |
+      SELECT T.NODEID AS NODE, T.SPACE_NAME AS SPACE, T.SPACE_TYPE AS TYPE,
+             T.TOTAL_CHUNK_NUM*C.CHUNK_SIZE AS TOTAL_BYTES,
+             T.FREE_CHUNK_NUM*C.CHUNK_SIZE  AS FREE_BYTES,
+             T.DATAFILE_NUM, T.MEDIA_ERROR
+      FROM SYS_ALL_TABLESPACES T, SYS_CTL_VARS C
+    metrics:
+      - name: xugu_tablespace_bytes
+        column: TOTAL_BYTES
+        labels: [node, space, type]
+        help: "表空间总大小(字节)"
+      - name: xugu_tablespace_free_bytes
+        column: FREE_BYTES
+        labels: [node, space, type]
+        help: "表空间空闲大小(字节)。系统空间(GSYS/USYS/LSYS)恒为0属正常，使用率只对 DATA/TEMP 型有意义"
+      - name: xugu_tablespace_datafiles
+        column: DATAFILE_NUM
+        labels: [node, space, type]
+        help: "表空间数据文件数"
+      - name: xugu_tablespace_media_error
+        column: MEDIA_ERROR
+        labels: [node, space, type]
+        help: "表空间介质错误(1=有错误，需立即检查存储设备)"
+
+  - name: datafiles
+    ttl: 60s
+    query: |
+      SELECT D.NODEID AS NODE, T.SPACE_NAME AS SPACE,
+             COUNT(*) AS NFILES, SUM(D.CURR_SIZE)*1024*1024 AS BYTES
+      FROM SYS_ALL_DATAFILES D
+      JOIN SYS_ALL_TABLESPACES T ON D.NODEID=T.NODEID AND D.SPACE_ID=T.SPACE_ID
+      GROUP BY D.NODEID, T.SPACE_NAME
+    metrics:
+      - name: xugu_datafile_bytes
+        column: BYTES
+        labels: [node, space]
+        help: "数据文件当前大小合计(字节)"
+
+  # ── 11. 慢 SQL ────────────────────────────────────────────────────
+  - name: slowsql
+    ttl: 60s
+    query: |
+      SELECT NODEID AS NODE, COUNT(*) AS CNT
+      FROM SYS_ALL_SLOWSQL_LOG GROUP BY NODEID
+    metrics:
+      - name: xugu_slowsql_total
+        column: CNT
+        type: counter
+        labels: [node]
+        help: "慢 SQL 日志累计条数(阈值 slow_sql_time；日志归档时计数可能回落)"
+
+  # 近 10 分钟窗口（服务器时钟口径）。不带 node 分组以保证空窗口时也输出 0。
+  - name: slowsql_recent
+    ttl: 60s
+    query: |
+      SELECT COUNT(*) AS CNT, MAX(ELAPSE_TIME)/1000.0 AS MAX_SECS
+      FROM SYS_ALL_SLOWSQL_LOG
+      WHERE EX_TIME >= SYSDATE - INTERVAL '10' MINUTE
+    metrics:
+      - name: xugu_slowsql_recent
+        column: CNT
+        help: "近 10 分钟慢 SQL 条数"
+      - name: xugu_slowsql_recent_max_duration_seconds
+        column: MAX_SECS
+        help: "近 10 分钟慢 SQL 最大耗时(秒)；窗口内无慢 SQL 时本指标缺失"
+
+  # Top 慢 SQL 明细（近 1 小时按耗时前 10）：info 型指标，明细在 label 中，
+  # 值为耗时秒。最多 10 条 × 每分钟刷新，label 基数可控。
+  - name: slowsql_top
+    ttl: 60s
+    query: |
+      SELECT NODEID AS NODE, USER_NAME AS USERNAME, CLIENT_IP, EX_TIME,
+             REPLACE(REPLACE(SUBSTR(SQL_STR,1,500), CHR(10), ' '), CHR(9), ' ') AS SQL,
+             MAX(ELAPSE_TIME)/1000.0 AS SECS
+      FROM SYS_ALL_SLOWSQL_LOG
+      WHERE EX_TIME >= SYSDATE - INTERVAL '1' HOUR
+      GROUP BY NODEID, USER_NAME, CLIENT_IP, EX_TIME,
+               REPLACE(REPLACE(SUBSTR(SQL_STR,1,500), CHR(10), ' '), CHR(9), ' ')
+      ORDER BY SECS DESC LIMIT 10
+    metrics:
+      - name: xugu_slowsql_top_duration_seconds
+        column: SECS
+        labels: [node, username, client_ip, ex_time, sql]
+        help: "近 1 小时 Top10 慢 SQL 明细：用户/客户端IP/执行时间/语句(截断500字符)在 label 中，值为耗时秒"
+
+  # ── 12. 错误与事件日志 ────────────────────────────────────────────
+  - name: errorlog
+    ttl: 60s
+    query: |
+      SELECT NODEID AS NODE, EX_LEVEL AS LEVEL, COUNT(*) AS CNT
+      FROM SYS_ALL_ERROR_LOG GROUP BY NODEID, EX_LEVEL
+    metrics:
+      - name: xugu_errorlog_total
+        column: CNT
+        type: counter
+        labels: [node, level]
+        help: "错误日志累计条数(按级别：NOTICE警告/USEREX用户/ERROR命令级/ABORT事务中止/DLOCK死锁/L06陈旧事务/SYSEX系统/NETER网络/MEMER内存错乱；日志按 errlog_size 归档时计数回落)"
+
+  # 重要级错误明细（近 1 小时，最多 20 条）：SYSEX/MEMER 系统级故障、DLOCK 死锁、
+  # ABORT 事务中止、L06 陈旧事务、NETER 网络错。ERROR/NOTICE 级量大且多为使用错误，不入明细。
+  - name: errorlog_top
+    ttl: 60s
+    query: |
+      SELECT NODEID AS NODE, EX_LEVEL AS LEVEL, ERR_CODE,
+             "USER" AS USERNAME, CLIENT_IP, EX_TIME,
+             REPLACE(REPLACE(SUBSTR(ERR_STR,1,300), CHR(10), ' '), CHR(9), ' ') AS MSG
+      FROM SYS_ALL_ERROR_LOG
+      WHERE EX_LEVEL IN ('SYSEX','MEMER','DLOCK','ABORT','L06','NETER')
+        AND EX_TIME >= SYSDATE - INTERVAL '1' HOUR
+      GROUP BY NODEID, EX_LEVEL, ERR_CODE, "USER", CLIENT_IP, EX_TIME,
+               REPLACE(REPLACE(SUBSTR(ERR_STR,1,300), CHR(10), ' '), CHR(9), ' ')
+      ORDER BY EX_TIME DESC LIMIT 20
+    metrics:
+      - name: xugu_errorlog_important_info
+        value: 1
+        labels: [node, level, err_code, username, client_ip, ex_time, msg]
+        help: "近 1 小时重要级错误明细(值恒1)：级别/错误码/用户/IP/时间/消息在 label 中。E19xxx=系统内存类致命，E14001=死锁"
+
+  # 致命/高危错误码专项计数：19002 存取保护(SIGSEGV，大概率掉进程并生成 exception_stack.trc)、
+  # 19003 非法指令、19016/19017 内存分配释放失败、14001 死锁。
+  - name: errorlog_fatal
+    ttl: 60s
+    query: |
+      SELECT NODEID AS NODE, ERR_CODE, COUNT(*) AS CNT
+      FROM SYS_ALL_ERROR_LOG
+      WHERE ERR_CODE IN (19002, 19003, 19016, 19017, 14001)
+      GROUP BY NODEID, ERR_CODE
+    metrics:
+      - name: xugu_fatal_errors_total
+        column: CNT
+        type: counter
+        labels: [node, err_code]
+        help: "致命/高危错误累计：19002=存取保护SIGSEGV(检查bin目录exception_stack.trc并提交原厂) 19003=非法指令 19016/19017=内存分配/释放失败 14001=死锁"
+
+  - name: eventlog
+    ttl: 120s
+    query: |
+      SELECT NODEID AS NODE, EVENT_TYPE AS TYPE, COUNT(*) AS CNT
+      FROM SYS_ALL_EVENT_LOG GROUP BY NODEID, EVENT_TYPE
+    metrics:
+      - name: xugu_eventlog_total
+        column: CNT
+        type: counter
+        labels: [node, type]
+        help: "事件日志累计条数(按事件类型：SYS_START/CKPT/REPAIR/DB_OPEN 等)"
+
+  # ── 13. 集群与存储段（单机分布式一体化点位）────────────────────────
+  - name: cluster_nodes
+    query: |
+      SELECT NODE_STATE AS STATE, COUNT(*) AS CNT FROM SYS_CLUSTERS GROUP BY NODE_STATE
+    metrics:
+      - name: xugu_cluster_nodes
+        column: CNT
+        labels: [state]
+        help: "集群节点数(按状态码分组，2=在线；单机恒为1个节点)"
+
+  - name: gstores
+    ttl: 60s
+    query: |
+      SELECT STORE_STA AS STA, COUNT(*) AS CNT FROM SYS_GSTORES GROUP BY STORE_STA
+    metrics:
+      - name: xugu_gstores
+        column: CNT
+        labels: [sta]
+        help: "全局存储段数(按状态码，实测健康态=1；扩容/修复期间出现其他状态)"
+
+  # ── 14. 数据库与对象 ──────────────────────────────────────────────
+  - name: databases
+    ttl: 120s
+    query: |
+      SELECT DB_NAME AS DB, ONLINE FROM SYS_DATABASES WHERE DROPED=FALSE
+    metrics:
+      - name: xugu_database_online
+        column: ONLINE
+        labels: [db]
+        help: "数据库在线状态(1=在线)"
+
+  - name: invalid_objects
+    ttl: 300s
+    query: |
+      SELECT (SELECT COUNT(*) FROM SYS_VIEWS WHERE VALID=FALSE)
+           + (SELECT COUNT(*) FROM SYS_PROCEDURES WHERE VALID=FALSE)
+           + (SELECT COUNT(*) FROM SYS_TRIGGERS WHERE VALID=FALSE)
+           + (SELECT COUNT(*) FROM SYS_PACKAGES WHERE VALID=FALSE) AS CNT
+      FROM DUAL
+    metrics:
+      - name: xugu_invalid_objects
+        column: CNT
+        help: "失效对象总数(视图/过程/触发器/包 VALID=FALSE)；依赖对象变更后未重编译会失效，用 always-sql/依赖对象重编译.sql 修复"
+
+  - name: database_storage
+    ttl: 300s
+    query: |
+      SELECT DB.DB_NAME AS DB, COUNT(*)*8388608 AS BYTES
+      FROM SYS_GSTORES G JOIN SYS_DATABASES DB ON G.DB_ID=DB.DB_ID
+      GROUP BY DB.DB_NAME
+    metrics:
+      - name: xugu_database_storage_bytes
+        column: BYTES
+        labels: [db]
+        help: "按数据库的存储占用估算(存储段数×8MB)，来源 SYS_GSTORES"
+
+  # 对象级存储 Top10（GSTORES.OBJ_ID = 该库 SYS_TABLES.TABLE_ID，实测验证）
+  - name: object_storage_top
+    ttl: 300s
+    query: |
+      SELECT DB.DB_NAME AS DB,
+             COALESCE(T.TABLE_NAME, ST.TABLE_NAME, '对象'||G.OBJ_ID) AS OBJ,
+             COUNT(*)*8388608 AS BYTES
+      FROM SYS_GSTORES G
+      JOIN SYS_DATABASES DB ON G.DB_ID=DB.DB_ID
+      LEFT JOIN SYS_TABLES T ON T.DB_ID=G.DB_ID AND T.TABLE_ID=G.OBJ_ID
+      LEFT JOIN SYS_SYSTEM_TABLES ST ON G.DB_ID=1 AND ST.TABLE_ID=G.OBJ_ID
+      GROUP BY DB.DB_NAME, COALESCE(T.TABLE_NAME, ST.TABLE_NAME, '对象'||G.OBJ_ID)
+      ORDER BY BYTES DESC LIMIT 10
+    metrics:
+      - name: xugu_object_storage_bytes
+        column: BYTES
+        labels: [db, obj]
+        help: "存储占用最大的 10 个对象(表/索引)，估算口径 存储段数×8MB"
+
+  - name: schema_storage_top
+    ttl: 300s
+    query: |
+      SELECT DB.DB_NAME AS DB, SC.SCHEMA_NAME AS SCHEMA_NAME, COUNT(*)*8388608 AS BYTES
+      FROM SYS_GSTORES G
+      JOIN SYS_DATABASES DB ON G.DB_ID=DB.DB_ID
+      JOIN SYS_TABLES T ON T.DB_ID=G.DB_ID AND T.TABLE_ID=G.OBJ_ID
+      JOIN SYS_SCHEMAS SC ON SC.DB_ID=G.DB_ID AND SC.SCHEMA_ID=T.SCHEMA_ID
+      GROUP BY DB.DB_NAME, SC.SCHEMA_NAME ORDER BY BYTES DESC LIMIT 10
+    metrics:
+      - name: xugu_schema_storage_bytes
+        column: BYTES
+        labels: [db, schema_name]
+        help: "存储占用最大的 10 个模式（用户表口径），估算 存储段数×8MB"
+
+  # 逻辑存储碎片：变更/删除产生的标记删除行。虚谷逻辑存储不实时回收，
+  # 物理文件内的空闲空间可复用；碎片率 = deleted/(active+deleted)。
+  - name: storage_fragment
+    ttl: 300s
+    query: |
+      SELECT DB.DB_NAME AS DB, SUM(S.ROW_NUM) AS ACTIVE_N, SUM(S.DEL_NUM) AS DEL_N
+      FROM SYS_ALL_STORES S
+      JOIN SYS_GSTORES G ON G.GSTO_NO=S.GSTO_NO
+      JOIN SYS_DATABASES DB ON G.DB_ID=DB.DB_ID
+      GROUP BY DB.DB_NAME
+    metrics:
+      - name: xugu_storage_active_rows
+        column: ACTIVE_N
+        labels: [db]
+        help: "按库的存储段有效行数合计"
+      - name: xugu_storage_deleted_rows
+        column: DEL_N
+        labels: [db]
+        help: "按库的存储段标记删除行数合计；碎片率 = deleted/(active+deleted)，高碎片可整理回收"
+
+  # ── 15. 安全：账号/黑名单/回收站 ──────────────────────────────────
+  - name: users
+    ttl: 120s
+    query: |
+      SELECT SUM(CASE WHEN LOCKED=TRUE  THEN 1 ELSE 0 END) AS LOCKED_N,
+             SUM(CASE WHEN EXPIRED=TRUE THEN 1 ELSE 0 END) AS EXPIRED_N,
+             COUNT(*) AS TOTAL_N
+      FROM SYS_USERS WHERE IS_ROLE=FALSE
+    metrics:
+      - { name: xugu_users,         column: TOTAL_N,   help: "数据库账号总数(不含角色)" }
+      - { name: xugu_users_locked,  column: LOCKED_N,  help: "被锁定的账号数(连续登录失败或人工锁定)" }
+      - { name: xugu_users_expired, column: EXPIRED_N, help: "已过期的账号数" }
+
+  - name: forbidden_ips
+    ttl: 120s
+    query: |
+      SELECT COUNT(*) AS CNT FROM SYS_ALL_FORBIDDEN_IPS WHERE IS_FORBIDDEN=TRUE
+    metrics:
+      - name: xugu_forbidden_ips
+        column: CNT
+        help: "当前被禁止连接的 IP 数(登录失败超限封禁)"
+
+  - name: recyclebin
+    ttl: 120s
+    query: SELECT COUNT(*) AS CNT FROM SYS_RECYCLEBIN
+    metrics:
+      - name: xugu_recyclebin_objects
+        column: CNT
+        help: "回收站对象数(enable_recycle=on 时 DROP 的对象入站)"
+
+  # ── 16. 关键参数（数值与开关型）──────────────────────────────────
+  - name: settings
+    mode: keyvalue
+    ttl: 300s
+    key_column: VAR_NAME
+    value_column: VAR_VALUE
+    key_label: name
+    metric_name: xugu_setting
+    labels: [NODE]
+    help: "关键系统参数当前值(布尔型 true/false 映射为 1/0；集群下按节点区分)"
+    query: |
+      SELECT NODEID AS NODE, VAR_NAME, VAR_VALUE FROM SYS_ALL_VARS
+      WHERE VAR_NAME IN ('max_conn_num','slow_sql_time','max_trans_modify',
+                         'enable_recycle','enable_audit','enable_monitor',
+                         'max_idle_time','error_level')
+
+  # ── 17. 定时作业与备份 ────────────────────────────────────────────
+  - name: jobs
+    ttl: 120s
+    query: |
+      SELECT COUNT(*) AS TOTAL_N,
+             COALESCE(SUM(CASE WHEN ENABLE=TRUE THEN 1 ELSE 0 END), 0) AS ENABLED_N
+      FROM SYS_JOBS
+    metrics:
+      - { name: xugu_jobs,         column: TOTAL_N,   help: "定时作业总数" }
+      - { name: xugu_jobs_enabled, column: ENABLED_N, help: "启用中的定时作业数" }
+
+  - name: backup
+    ttl: 300s
+    query: |
+      SELECT (SELECT COUNT(*) FROM SYS_BACKUP_PLANS WHERE ENABLE=TRUE) AS PLANS_ENABLED,
+             (SELECT COUNT(*) FROM SYS_BACKUP_ITEMS) AS ITEMS,
+             (SELECT MAX(NEXT_RUN_T) FROM SYS_BACKUP_ITEMS) AS NEXT_RUN
+      FROM DUAL
+    metrics:
+      - { name: xugu_backup_plans_enabled, column: PLANS_ENABLED, help: "启用中的备份计划数" }
+      - { name: xugu_backup_items,         column: ITEMS,         help: "备份项总数" }
+      - name: xugu_backup_next_run_timestamp_seconds
+        column: NEXT_RUN
+        help: "下一次备份计划执行时间(Unix秒)；无备份计划时本指标缺失"

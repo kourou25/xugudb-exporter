@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/xugu-alerts.yml
+
+scrape_configs:
+  - job_name: xugudb
+    static_configs:
+      - targets: ["xugu-exporter:9156"]
+        labels:
+          # 多实例时为每个 exporter 目标设置可读的实例别名
+          env: demo
+
+  # 数据库服务器资源（供"服务器资源"面板行）。生产环境把 targets 指向
+  # 数据库服务器上的 node_exporter(Linux)/windows_exporter(Windows)。
+  - job_name: server
+    static_configs:
+      - targets: ["node-exporter:9100"]
